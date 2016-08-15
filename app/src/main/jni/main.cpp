@@ -128,7 +128,7 @@ struct engine {
     bool splitscreen;
     bool rebuildCommadBuffersRequired;
     VkVertexInputBindingDescription vertexInputBindingDescription;
-    VkVertexInputAttributeDescription vertexInputAttributeDescription[2];
+    VkVertexInputAttributeDescription vertexInputAttributeDescription;
     VkShaderModule shdermodules[6];
     int displayLayer;
     int layerCount;
@@ -187,6 +187,7 @@ char* loadAsset(const char* filename, struct engine *pEngine, bool &ok, size_t &
 #endif
 }
 
+void updateColours(struct engine* engine);
 
 /**
  * Initialize an EGL context for the current display.
@@ -1313,7 +1314,7 @@ static int engine_init_display(struct engine* engine) {
     vertexBufferCreateInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     vertexBufferCreateInfo.pNext = NULL;
     vertexBufferCreateInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
-    vertexBufferCreateInfo.size = sizeof(vertexData);
+    vertexBufferCreateInfo.size = sizeof(vertexDataCube)+sizeof(vetrexDataPyramid);
     vertexBufferCreateInfo.queueFamilyIndexCount = 0;
     vertexBufferCreateInfo.pQueueFamilyIndices = NULL;
     vertexBufferCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
@@ -1366,7 +1367,8 @@ static int engine_init_display(struct engine* engine) {
         return -1;
     }
 
-    memcpy(vertexMappedMemory, vertexData, sizeof(vertexData));
+    memcpy(vertexMappedMemory, vertexDataCube, sizeof(vertexDataCube));
+    memcpy(vertexMappedMemory+sizeof(vertexDataCube), vetrexDataPyramid, sizeof(vetrexDataPyramid));
 
     vkUnmapMemory(engine->vkDevice, vertexMemory);
 
@@ -1377,16 +1379,16 @@ static int engine_init_display(struct engine* engine) {
     }
     engine->vertexInputBindingDescription.binding = 0;
     engine->vertexInputBindingDescription.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-    engine->vertexInputBindingDescription.stride = sizeof(vertexData[0]);
+    engine->vertexInputBindingDescription.stride = sizeof(vertexDataCube[0]);
 
-    engine->vertexInputAttributeDescription[0].binding = 0;
-    engine->vertexInputAttributeDescription[0].location = 0;
-    engine->vertexInputAttributeDescription[0].format = VK_FORMAT_R32G32B32A32_SFLOAT;
-    engine->vertexInputAttributeDescription[0].offset = 0;
-    engine->vertexInputAttributeDescription[1].binding = 0;
-    engine->vertexInputAttributeDescription[1].location = 1;
-    engine->vertexInputAttributeDescription[1].format = VK_FORMAT_R32G32B32A32_SFLOAT;
-    engine->vertexInputAttributeDescription[1].offset = 16;
+    engine->vertexInputAttributeDescription.binding = 0;
+    engine->vertexInputAttributeDescription.location = 0;
+    engine->vertexInputAttributeDescription.format = VK_FORMAT_R32G32B32A32_SFLOAT;
+    engine->vertexInputAttributeDescription.offset = 0;
+//    engine->vertexInputAttributeDescription[1].binding = 0;
+//    engine->vertexInputAttributeDescription[1].location = 1;
+//    engine->vertexInputAttributeDescription[1].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+//    engine->vertexInputAttributeDescription[1].offset = 16;
 
     setupTraditionalBlendPipeline(engine);
     setupPeelPipeline(engine);
@@ -1458,8 +1460,8 @@ int setupTraditionalBlendPipeline(struct engine* engine)
     vi.flags = 0;
     vi.vertexBindingDescriptionCount = 1;
     vi.pVertexBindingDescriptions = &engine->vertexInputBindingDescription;
-    vi.vertexAttributeDescriptionCount = 2;
-    vi.pVertexAttributeDescriptions = engine->vertexInputAttributeDescription;
+    vi.vertexAttributeDescriptionCount = 1;
+    vi.pVertexAttributeDescriptions = &engine->vertexInputAttributeDescription;
 
     VkPipelineInputAssemblyStateCreateInfo ia;
     ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
@@ -1626,8 +1628,8 @@ int setupPeelPipeline(struct engine* engine) {
     vi.flags = 0;
     vi.vertexBindingDescriptionCount = 1;
     vi.pVertexBindingDescriptions = &engine->vertexInputBindingDescription;
-    vi.vertexAttributeDescriptionCount = 2;
-    vi.pVertexAttributeDescriptions = engine->vertexInputAttributeDescription;
+    vi.vertexAttributeDescriptionCount = 1;
+    vi.pVertexAttributeDescriptions = &engine->vertexInputAttributeDescription;
 
     VkPipelineInputAssemblyStateCreateInfo ia;
     ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
@@ -1818,7 +1820,7 @@ int setupBlendPipeline(struct engine* engine) {
     vi.vertexBindingDescriptionCount = 1;
     vi.pVertexBindingDescriptions = &engine->vertexInputBindingDescription;
     vi.vertexAttributeDescriptionCount = 1;
-    vi.pVertexAttributeDescriptions = engine->vertexInputAttributeDescription;
+    vi.pVertexAttributeDescriptions = &engine->vertexInputAttributeDescription;
 
     VkPipelineInputAssemblyStateCreateInfo ia;
     ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
@@ -1983,7 +1985,7 @@ int setupUniforms(struct engine* engine)
     }
 
     printf ("minUniformBufferOffsetAlignment %d.\n", (int)engine->deviceProperties.limits.minUniformBufferOffsetAlignment);
-    engine->modelBufferValsOffset = sizeof(float)*16;
+    engine->modelBufferValsOffset = sizeof(float)*(16+4);
     if (engine->modelBufferValsOffset < engine->deviceProperties.limits.minUniformBufferOffsetAlignment)
         engine->modelBufferValsOffset = engine->deviceProperties.limits.minUniformBufferOffsetAlignment;
     printf ("modelBufferValsOffset %d.\n", engine->modelBufferValsOffset);
@@ -2055,6 +2057,8 @@ int setupUniforms(struct engine* engine)
         LOGE ("vkBindBufferMemory returned error %d.\n", res);
         return -1;
     }
+
+    updateColours(engine);
 
     engine->descriptorSetLayouts = new VkDescriptorSetLayout[3];
 
@@ -2296,10 +2300,12 @@ void createSecondaryBuffers(struct engine* engine)
                                 VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 engine->pipelineLayout, 1, 1,
                                 &engine->sceneDescriptorSet, 0, NULL);
-        VkDeviceSize offsets[1] = {0};
+        VkDeviceSize offsets[1];
+        //Draw Cubes:
+        offsets[0] = 0;
         vkCmdBindVertexBuffers(engine->secondaryCommandBuffers[i], 0, 1, &engine->vertexBuffer,
                                offsets);
-        for (int object = 0; object < engine->boxCount; object++) {
+        for (int object = 0; object < engine->boxCount/2; object++) {
             vkCmdBindDescriptorSets(engine->secondaryCommandBuffers[i],
                                     VK_PIPELINE_BIND_POINT_GRAPHICS,
                                     engine->pipelineLayout, 0, 1,
@@ -2307,7 +2313,18 @@ void createSecondaryBuffers(struct engine* engine)
 
             vkCmdDraw(engine->secondaryCommandBuffers[i], 12 * 3, 1, 0, 0);
         }
+        //Draw Pyramids:
+        offsets[0] = sizeof(vertexDataCube);
+        vkCmdBindVertexBuffers(engine->secondaryCommandBuffers[i], 0, 1, &engine->vertexBuffer,
+                               offsets);
+        for (int object = MAX_BOXES/2; object < MAX_BOXES/2+engine->boxCount/2; object++) {
+            vkCmdBindDescriptorSets(engine->secondaryCommandBuffers[i],
+                                    VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    engine->pipelineLayout, 0, 1,
+                                    &engine->modelDescriptorSets[object], 0, NULL);
 
+            vkCmdDraw(engine->secondaryCommandBuffers[i], 6 * 3, 1, 0, 0);
+        }
         res = vkEndCommandBuffer(engine->secondaryCommandBuffers[i]);
         if (res != VK_SUCCESS) {
             printf("vkBeginCommandBuffer returned error.\n");
@@ -2387,9 +2404,9 @@ void createSecondaryBuffers(struct engine* engine)
                                     (layer==0) ? engine->pipelineLayout : engine->blendPeelPipelineLayout, 1, 1,
                                     &engine->sceneDescriptorSet, 0, NULL);
             VkDeviceSize offsets[1] = {0};
-            vkCmdBindVertexBuffers(engine->secondaryCommandBuffers[cmdBuffIndex], 0, 1,
-                                   &engine->vertexBuffer,
-                                   offsets);
+//            vkCmdBindVertexBuffers(engine->secondaryCommandBuffers[cmdBuffIndex], 0, 1,
+//                                   &engine->vertexBuffer,
+//                                   offsets);
 
             if (layer>0)
             {
@@ -2399,15 +2416,30 @@ void createSecondaryBuffers(struct engine* engine)
                                         &engine->depthInputAttachmentDescriptorSets[!(layer%2)], 0, NULL);
             }
 
-            for (int object = 0; object < engine->boxCount; object++) {
+            //Draw Cubes:
+            offsets[0] = 0;
+            vkCmdBindVertexBuffers(engine->secondaryCommandBuffers[cmdBuffIndex], 0, 1, &engine->vertexBuffer,
+                                   offsets);
+            for (int object = 0; object < engine->boxCount/2; object++) {
                 vkCmdBindDescriptorSets(engine->secondaryCommandBuffers[cmdBuffIndex],
                                         VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                        (layer==0) ? engine->pipelineLayout : engine->blendPeelPipelineLayout, 0, 1,
+                                        engine->pipelineLayout, 0, 1,
                                         &engine->modelDescriptorSets[object], 0, NULL);
 
                 vkCmdDraw(engine->secondaryCommandBuffers[cmdBuffIndex], 12 * 3, 1, 0, 0);
             }
+            //Draw Pyramids:
+            offsets[0] = sizeof(vertexDataCube);
+            vkCmdBindVertexBuffers(engine->secondaryCommandBuffers[cmdBuffIndex], 0, 1, &engine->vertexBuffer,
+                                   offsets);
+            for (int object = MAX_BOXES/2; object < MAX_BOXES/2+engine->boxCount/2; object++) {
+                vkCmdBindDescriptorSets(engine->secondaryCommandBuffers[cmdBuffIndex],
+                                        VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                        engine->pipelineLayout, 0, 1,
+                                        &engine->modelDescriptorSets[object], 0, NULL);
 
+                vkCmdDraw(engine->secondaryCommandBuffers[cmdBuffIndex], 6 * 3, 1, 0, 0);
+            }
 
             //Test clearing depth buffer at end
             VkClearAttachment clear;
@@ -2514,6 +2546,18 @@ void createSecondaryBuffers(struct engine* engine)
                 return;
             }
         }
+    }
+}
+
+void updateColours(struct engine* engine)
+{
+    for (int i=0; i<MAX_BOXES; i++)
+    {
+        float *colour = ((float*)(engine->uniformMappedMemory + engine->modelBufferValsOffset*i))+16;
+        colour[0] = (float)rand() / RAND_MAX;
+        colour[1] = (float)rand() / RAND_MAX;
+        colour[2] = (float)rand() / RAND_MAX;
+        colour[3] = 0.5;
     }
 }
 

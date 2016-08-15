@@ -4,6 +4,7 @@
 
 layout (set = 0, binding = 0) uniform bufferVals {
     mat4 mv;
+    vec4 colour;
 } myBufferVals;
 
 layout (std140, set = 1, binding = 0) uniform bufferVals1 {
@@ -11,7 +12,7 @@ layout (std140, set = 1, binding = 0) uniform bufferVals1 {
 } myBufferVals1;
 
 layout (location = 0) in vec4 pos;
-layout (location = 1) in vec4 inColor;
+//layout (location = 1) in vec4 inColor;
 layout (location = 0) out vec4 outColor;
 
 out gl_PerVertex { 
@@ -19,7 +20,7 @@ out gl_PerVertex {
 };
 
 void main() {
-   outColor = inColor;
+   outColor = myBufferVals.colour;
    mat4 mvp = myBufferVals1.p * myBufferVals.mv;
    gl_Position = mvp * pos;
 
