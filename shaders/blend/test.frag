@@ -8,13 +8,20 @@ layout (input_attachment_index=1, set=3, binding=0) uniform subpassInput subpass
 layout (input_attachment_index=2, set=4, binding=0) uniform subpassInput subpass2;
 layout (location = 0) out vec4 outColor;
 
+float viewSpaceDepth(float NDCDepth)
+{
+    //((n*f)/(f-n))/(NDCDepth-((f+n)/(2*(f-n)))+0.5))
+    return 26.24/(NDCDepth-1.64);
+}
+
 void main() {
    vec4 color = subpassLoad(subpass);
    float thisDepth = subpassLoad(subpass1).r;
    float lastDepth = subpassLoad(subpass2).r;
 //   color.a=thisDepth;
 //   outColor = vec4(color.r*color.a, color.g*color.a, color.b*color.a, color.a);
-   float depthdiff=thisDepth-lastDepth;
+   float depthdiff=viewSpaceDepth(lastDepth)-viewSpaceDepth(thisDepth);
+   depthdiff = depthdiff/2.0;
 //   outColor = vec4(thisDepth,thisDepth,thisDepth,1);
 //   outColor = vec4(lastDepth,lastDepth,lastDepth,1);
    outColor = vec4(depthdiff,depthdiff,depthdiff,1);
