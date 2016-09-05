@@ -21,9 +21,9 @@ void main() {
 //   color.a=thisDepth;
 //   outColor = vec4(color.r*color.a, color.g*color.a, color.b*color.a, color.a);
    float depthdiff=viewSpaceDepth(lastDepth)-viewSpaceDepth(thisDepth);
-   depthdiff = depthdiff/2.0;
+   float alpha = depthdiff/2.0;
 //   outColor = vec4(thisDepth,thisDepth,thisDepth,1);
 //   outColor = vec4(lastDepth,lastDepth,lastDepth,1);
-   outColor = vec4(depthdiff,depthdiff,depthdiff,1);
+   outColor = vec4(color.r*alpha, color.g*alpha, color.b*alpha, alpha);
 //   outColor = color;
 }
