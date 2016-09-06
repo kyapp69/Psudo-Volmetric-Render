@@ -2708,7 +2708,7 @@ static void engine_draw_frame(struct engine* engine) {
         if (engine->displayLayer < 0 || layer==engine->displayLayer)
         {
 //        LOGI("Blend: Executing secondaryCommandBuffer %d", cmdBuffIndex + engine->swapchainImageCount);
-            if (layer!=0)
+            if (layer%2!=0)
                 vkCmdExecuteCommands(engine->renderCommandBuffer[0], 1,
                              &engine->secondaryCommandBuffers[cmdBuffIndex + engine->swapchainImageCount]);
         }
@@ -3059,7 +3059,7 @@ int main()
     engine.simulation->step();
     engine.splitscreen = false;
     engine.rebuildCommadBuffersRequired = false;
-    engine.displayLayer=0;
+    engine.displayLayer=-1;
     engine.layerCount=4;
     engine.boxCount=100;
 
