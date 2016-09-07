@@ -25,5 +25,6 @@ void main() {
 //   outColor = vec4(thisDepth,thisDepth,thisDepth,1);
 //   outColor = vec4(lastDepth,lastDepth,lastDepth,1);
    outColor = vec4(color.r*alpha, color.g*alpha, color.b*alpha, alpha);
+//   outColor = vec4(color.a, 1.0-color.a, 0.0, 1.0);
 //   outColor = color;
 }

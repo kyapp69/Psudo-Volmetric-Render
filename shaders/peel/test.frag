@@ -11,4 +11,5 @@ void main() {
    if (gl_FragCoord.z <= depth)
     discard;
    outColor = color;
+   outColor.a = gl_FrontFacing ? 1.0 : 0.0;
 }

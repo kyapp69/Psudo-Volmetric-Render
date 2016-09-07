@@ -91,8 +91,8 @@ struct engine {
     VkImage depthImage[2];
     VkImageView depthView[2];
     VkDeviceMemory depthMemory;
-    VkImage peelImage;
-    VkImageView peelView;
+    VkImage peelImages[2];
+    VkImageView peelViews[2];
     VkDeviceMemory peelMemory;
     uint32_t swapchainImageCount = 0;
     VkSwapchainKHR swapchain;
@@ -110,7 +110,7 @@ struct engine {
     VkDescriptorSet *modelDescriptorSets;
     VkDescriptorSet identityModelDescriptorSet;
     VkDescriptorSet identitySceneDescriptorSet;
-    VkDescriptorSet colourInputAttachmentDescriptorSet;
+    VkDescriptorSet colourInputAttachmentDescriptorSets[2];
     VkDescriptorSet depthInputAttachmentDescriptorSets[2];
     uint32_t modelBufferValsOffset;
     VkBuffer vertexBuffer;
@@ -813,92 +813,106 @@ static int engine_init_display(struct engine* engine) {
     }
     LOGI("Depth buffers created");
 
-    //Setup the peel buffer:
+    //Setup the peel buffers:
+    imageCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageCreateInfo.pNext = NULL;
+    imageCreateInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageCreateInfo.format = format;
+    imageCreateInfo.extent.width = swapChainExtent.width;
+    imageCreateInfo.extent.height = swapChainExtent.height;
+    imageCreateInfo.extent.depth = 1;
+    imageCreateInfo.mipLevels = 1;
+    imageCreateInfo.arrayLayers = 1;
+    imageCreateInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageCreateInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imageCreateInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    imageCreateInfo.queueFamilyIndexCount = 0;
+    imageCreateInfo.pQueueFamilyIndices = NULL;
+    imageCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    imageCreateInfo.flags = 0;
+
+    //First try using lazy memory:
+    imageCreateInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
+
+    //Create images for peel buffer
+
+    for (int i=0; i<2; i++)
     {
-        imageCreateInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-        imageCreateInfo.pNext = NULL;
-        imageCreateInfo.imageType = VK_IMAGE_TYPE_2D;
-        imageCreateInfo.format = format;
-        imageCreateInfo.extent.width = swapChainExtent.width;
-        imageCreateInfo.extent.height = swapChainExtent.height;
-        imageCreateInfo.extent.depth = 1;
-        imageCreateInfo.mipLevels = 1;
-        imageCreateInfo.arrayLayers = 1;
-        imageCreateInfo.samples = VK_SAMPLE_COUNT_1_BIT;
-        imageCreateInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-        imageCreateInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        imageCreateInfo.queueFamilyIndexCount = 0;
-        imageCreateInfo.pQueueFamilyIndices = NULL;
-        imageCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        imageCreateInfo.flags = 0;
-
-        //First try using lazy memory:
-        imageCreateInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
-
-        //Create image for peel buffer
-        res = vkCreateImage(engine->vkDevice, &imageCreateInfo, NULL, &engine->peelImage);
+        res = vkCreateImage(engine->vkDevice, &imageCreateInfo, NULL, &engine->peelImages[i]);
         if (res != VK_SUCCESS) {
             LOGE ("vkCreateImage returned error while creating peel buffer.\n");
             return -1;
         }
+    }
 
-        VkMemoryRequirements memoryRequirements;
-        vkGetImageMemoryRequirements(engine->vkDevice, engine->peelImage, &memoryRequirements);
+    memoryRequirements.size=0;
+    vkGetImageMemoryRequirements(engine->vkDevice, engine->peelImages[0], &memoryRequirements);
 
-        found = false;
-        uint32_t typeBits = memoryRequirements.memoryTypeBits;
-        uint32_t typeIndex;
-        VkFlags requirements_mask = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT;
-        for (typeIndex = 0; typeIndex < engine->physicalDeviceMemoryProperties.memoryTypeCount; typeIndex++) {
-            if ((typeBits & 1) == 1)//Check last bit;
-            {
-                if ((engine->physicalDeviceMemoryProperties.memoryTypes[typeIndex].propertyFlags & requirements_mask) == requirements_mask)
-                {
-                    found=true;
-                    break;
-                }
-            }
-            typeBits >>= 1;
-        }
-        if (found)
-            LOGI("Using lazily allocated memory & VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT for the peel buffer.");
-        else
+    found = false;
+    typeBits = memoryRequirements.memoryTypeBits;
+    requirements_mask = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT | VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT;
+    for (typeIndex = 0; typeIndex < engine->physicalDeviceMemoryProperties.memoryTypeCount; typeIndex++) {
+        if ((typeBits & 1) == 1)//Check last bit;
         {
-            LOGI("Not using lazily allocated memory for the peel buffer.");
-            imageCreateInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
-
-            vkDestroyImage(engine->vkDevice, engine->peelImage, NULL);
-            //Create image for peel buffer
-            res = vkCreateImage(engine->vkDevice, &imageCreateInfo, NULL, &engine->peelImage);
+            if ((engine->physicalDeviceMemoryProperties.memoryTypes[typeIndex].propertyFlags & requirements_mask) == requirements_mask)
+            {
+                found=true;
+                break;
+            }
+        }
+        typeBits >>= 1;
+    }
+    if (found)
+        LOGI("Using lazily allocated memory & VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT for the peel buffer.");
+    else
+    {
+        LOGI("Not using lazily allocated memory for the peel buffer.");
+        imageCreateInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
+        for (int i=0; i<2; i++)
+            vkDestroyImage(engine->vkDevice, engine->peelImages[i], NULL);
+        //Create image for peel buffer
+        for (int i=0; i<2; i++)
+        {
+            res = vkCreateImage(engine->vkDevice, &imageCreateInfo, NULL, &engine->peelImages[i]);
             if (res != VK_SUCCESS) {
                 LOGE ("vkCreateImage returned error while creating peel buffer.\n");
                 return -1;
             }
-            vkGetImageMemoryRequirements(engine->vkDevice, engine->peelImage, &memoryRequirements);
-            typeBits = memoryRequirements.memoryTypeBits;
-            //Get the index of the first set bit:
-            for (typeIndex = 0; typeIndex < 32; typeIndex++) {
-                if ((typeBits & 1) == 1)//Check last bit;
-                    break;
-                typeBits >>= 1;
-            }
         }
-
-        VkMemoryAllocateInfo memAllocInfo;
-        memAllocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-        memAllocInfo.pNext = NULL;
-        memAllocInfo.allocationSize = memoryRequirements.size;
-        memAllocInfo.memoryTypeIndex = typeIndex;
-
-        //Allocate memory
-        res = vkAllocateMemory(engine->vkDevice, &memAllocInfo, NULL, &engine->peelMemory);
-        if (res != VK_SUCCESS) {
-            LOGE ("vkAllocateMemory returned error while creating peel buffer.\n");
-            return -1;
+        vkGetImageMemoryRequirements(engine->vkDevice, engine->peelImages[0], &memoryRequirements);
+        typeBits = memoryRequirements.memoryTypeBits;
+        //Get the index of the first set bit:
+        for (typeIndex = 0; typeIndex < 32; typeIndex++) {
+            if ((typeBits & 1) == 1)//Check last bit;
+                break;
+            typeBits >>= 1;
         }
+    }
 
+    imageoffset = 0;
+    if (memoryRequirements.alignment > 1 && memoryRequirements.size % memoryRequirements.alignment != 0)
+        imageoffset = memoryRequirements.size + (memoryRequirements.alignment-(memoryRequirements.size % memoryRequirements.alignment));
+    else
+        imageoffset = memoryRequirements.size;
+
+    LOGI("MemoryRequirements.size: %" PRIu64 " memoryRequirements.alignment: %" PRIu64 " imageoffset: %" PRIu64 ".", memoryRequirements.size, memoryRequirements.alignment, imageoffset);
+
+    memAllocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    memAllocInfo.pNext = NULL;
+    memAllocInfo.allocationSize = imageoffset + memoryRequirements.size;
+    memAllocInfo.memoryTypeIndex = typeIndex;
+
+    //Allocate memory
+    res = vkAllocateMemory(engine->vkDevice, &memAllocInfo, NULL, &engine->peelMemory);
+    if (res != VK_SUCCESS) {
+        LOGE ("vkAllocateMemory returned error while creating peel buffer.\n");
+        return -1;
+    }
+
+    for (int i=0; i<2; i++)
+    {
         //Bind memory
-        res = vkBindImageMemory(engine->vkDevice, engine->peelImage, engine->peelMemory, 0);
+        res = vkBindImageMemory(engine->vkDevice, engine->peelImages[i], engine->peelMemory, imageoffset*i);
         if (res != VK_SUCCESS) {
             LOGE ("vkBindImageMemory returned error while creating peel buffer. %d\n", res);
             return -1;
@@ -909,7 +923,7 @@ static int engine_init_display(struct engine* engine) {
         imageMemoryBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         imageMemoryBarrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
         imageMemoryBarrier.pNext = NULL;
-        imageMemoryBarrier.image = engine->peelImage;
+        imageMemoryBarrier.image = engine->peelImages[i];
         imageMemoryBarrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         imageMemoryBarrier.subresourceRange.baseMipLevel = 0;
         imageMemoryBarrier.subresourceRange.levelCount = 1;
@@ -933,7 +947,7 @@ static int engine_init_display(struct engine* engine) {
         VkImageViewCreateInfo view_info;
         view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
         view_info.pNext = NULL;
-        view_info.image = engine->peelImage;
+        view_info.image = engine->peelImages[i];
         view_info.format = format;
         view_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
         view_info.components.r = VK_COMPONENT_SWIZZLE_R;
@@ -947,7 +961,7 @@ static int engine_init_display(struct engine* engine) {
         view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
         view_info.flags = 0;
 
-        res = vkCreateImageView(engine->vkDevice, &view_info, NULL, &engine->peelView);
+        res = vkCreateImageView(engine->vkDevice, &view_info, NULL, &engine->peelViews[i]);
         if (res != VK_SUCCESS) {
             LOGE ("vkCreateImageView returned error while creating peel buffer. %d\n", res);
             return -1;
@@ -995,7 +1009,7 @@ static int engine_init_display(struct engine* engine) {
     }
 
     //Setup the renderpass:
-    VkAttachmentDescription attachments[4];
+    VkAttachmentDescription attachments[5];
     attachments[0].format = format;
     attachments[0].samples = VK_SAMPLE_COUNT_1_BIT;
     attachments[0].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
@@ -1031,7 +1045,16 @@ static int engine_init_display(struct engine* engine) {
     attachments[3].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     attachments[3].initialLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
     attachments[3].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-    attachments[3].flags = 0;
+    attachments[3].flags = 0;    
+    attachments[4].format = format;
+    attachments[4].samples = VK_SAMPLE_COUNT_1_BIT;
+    attachments[4].loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    attachments[4].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    attachments[4].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    attachments[4].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    attachments[4].initialLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    attachments[4].finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    attachments[4].flags = 0;
 
     VkAttachmentReference color_reference;
     color_reference.attachment = 0;
@@ -1048,16 +1071,20 @@ static int engine_init_display(struct engine* engine) {
     depth_inputattachment_reference[1].attachment = 3;
     depth_inputattachment_reference[1].layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-    VkAttachmentReference peelcolor_attachment_reference;
-    peelcolor_attachment_reference.attachment = 2;
-    peelcolor_attachment_reference.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    VkAttachmentReference peelcolor_inputattachment_reference;
-    peelcolor_inputattachment_reference.attachment = 2;
-    peelcolor_inputattachment_reference.layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkAttachmentReference peelcolor_attachment_reference[2];
+    peelcolor_attachment_reference[0].attachment = 2;
+    peelcolor_attachment_reference[0].layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    peelcolor_attachment_reference[1].attachment = 4;
+    peelcolor_attachment_reference[1].layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    VkAttachmentReference peelcolor_inputattachment_reference[2];
+    peelcolor_inputattachment_reference[0].attachment = 2;
+    peelcolor_inputattachment_reference[0].layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    peelcolor_inputattachment_reference[1].attachment = 4;
+    peelcolor_inputattachment_reference[1].layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
     uint32_t colour_attachment = 0;
     uint32_t depth_attachment[2] = {1, 3};
-    uint32_t peel_attachment = 2;
+    uint32_t peel_attachment[2] = {2, 4};
 
     uint subpassCount = MAX_LAYERS*2+1;
     uint subpassDependencyCount=(subpassCount*(subpassCount-1))/2;
@@ -1071,32 +1098,33 @@ static int engine_init_display(struct engine* engine) {
     subpasses[0].pColorAttachments = &color_reference;
     subpasses[0].pResolveAttachments = NULL;
     subpasses[0].pDepthStencilAttachment = &depth_attachment_reference[0];
-    subpasses[0].preserveAttachmentCount = 2;
-    uint32_t PreserveAttachments[2] = {peel_attachment, depth_attachment[1]};
+    subpasses[0].preserveAttachmentCount = 3;
+    uint32_t PreserveAttachments[3] = {peel_attachment[0],peel_attachment[1], depth_attachment[1]};
     subpasses[0].pPreserveAttachments = PreserveAttachments;
 
     for (int i =0; i<MAX_LAYERS; i++)
     {
 
-        uint32_t *PreserveAttachments = new uint32_t[2];  //This will leak
+        uint32_t *PreserveAttachments = new uint32_t[3];  //This will leak
         subpasses[i * 2 + 1].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
         subpasses[i * 2 + 1].flags = 0;
         subpasses[i * 2 + 1].inputAttachmentCount = (i==0) ? 0 : 1;
         subpasses[i * 2 + 1].pInputAttachments = &depth_inputattachment_reference[!(i%2)];
         subpasses[i * 2 + 1].colorAttachmentCount = 1;
-        subpasses[i * 2 + 1].pColorAttachments = &peelcolor_attachment_reference;
+        subpasses[i * 2 + 1].pColorAttachments = &peelcolor_attachment_reference[i%2];
         subpasses[i * 2 + 1].pResolveAttachments = NULL;
         subpasses[i * 2 + 1].pDepthStencilAttachment = &depth_attachment_reference[i%2];
-        subpasses[i * 2 + 1].preserveAttachmentCount = 2;
-        PreserveAttachments[0] = colour_attachment;
-        PreserveAttachments[1] = depth_attachment[!(i%2)];
+        subpasses[i * 2 + 1].preserveAttachmentCount = 3;
+        PreserveAttachments[0] = peel_attachment[0];
+        PreserveAttachments[1] = peel_attachment[1];
+        PreserveAttachments[2] = depth_attachment[!(i%2)];
         subpasses[i * 2 + 1].pPreserveAttachments = PreserveAttachments;
 
         subpasses[i * 2 + 2].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
         subpasses[i * 2 + 2].flags = 0;
         subpasses[i * 2 + 2].inputAttachmentCount = 3;
         VkAttachmentReference *inputAttachments = new VkAttachmentReference[3];  //This will leak
-        inputAttachments[0] = peelcolor_inputattachment_reference;
+        inputAttachments[0] = peelcolor_inputattachment_reference[i%2];
         inputAttachments[1] = depth_inputattachment_reference[(i%2)];
         inputAttachments[2] = depth_inputattachment_reference[!(i%2)];
         subpasses[i * 2 + 2].pInputAttachments = inputAttachments;
@@ -1104,11 +1132,12 @@ static int engine_init_display(struct engine* engine) {
         subpasses[i * 2 + 2].pColorAttachments = &color_reference;
         subpasses[i * 2 + 2].pResolveAttachments = NULL;
         subpasses[i * 2 + 2].pDepthStencilAttachment = NULL;
-        subpasses[i * 2 + 2].preserveAttachmentCount = 3;
-        PreserveAttachments = new uint32_t[3];  //This will leak
-        PreserveAttachments[0] = peel_attachment;
-        PreserveAttachments[1] = depth_attachment[0];
-        PreserveAttachments[2] = depth_attachment[1];
+        subpasses[i * 2 + 2].preserveAttachmentCount = 4;
+        PreserveAttachments = new uint32_t[4];  //This will leak
+        PreserveAttachments[0] = peel_attachment[0];
+        PreserveAttachments[1] = peel_attachment[1];
+        PreserveAttachments[2] = depth_attachment[0];
+        PreserveAttachments[3] = depth_attachment[1];
         subpasses[i * 2 + 2].pPreserveAttachments = PreserveAttachments;
         LOGI("peel %d subpasses %d and %d pDepthStencilAttachment %d pInputAttachments %d", i, i * 2 + 1, i * 2 + 2, i%2, !(i%2));
     }
@@ -1138,7 +1167,7 @@ static int engine_init_display(struct engine* engine) {
     rp_info.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
     rp_info.pNext = NULL;
     rp_info.flags=0;
-    rp_info.attachmentCount = 4;
+    rp_info.attachmentCount = 5;
     rp_info.pAttachments = attachments;
     rp_info.subpassCount = subpassCount;
     rp_info.pSubpasses = subpasses;
@@ -1299,20 +1328,21 @@ static int engine_init_display(struct engine* engine) {
 
     for (i = 0; i < engine->swapchainImageCount; i++) {
 
-        VkImageView imageViewAttachments[4];
+        VkImageView imageViewAttachments[5];
 
         //Attach the correct swapchain colourbuffer
         imageViewAttachments[0] = engine->swapChainViews[i];
         //We only have one depth buffer which we attach to all framebuffers
         imageViewAttachments[1] = engine->depthView[0];
-        imageViewAttachments[2] = engine->peelView;
+        imageViewAttachments[2] = engine->peelViews[0];
         imageViewAttachments[3] = engine->depthView[1];
+        imageViewAttachments[4] = engine->peelViews[1];
 
         VkFramebufferCreateInfo fb_info;
         fb_info.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
         fb_info.pNext = NULL;
         fb_info.renderPass = engine->renderPass;
-        fb_info.attachmentCount = 4;
+        fb_info.attachmentCount = 5;
         fb_info.pAttachments = imageViewAttachments;
         fb_info.width = swapChainExtent.width;
         fb_info.height = swapChainExtent.height;
@@ -1986,13 +2016,13 @@ int setupUniforms(struct engine* engine)
     typeCounts[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
     typeCounts[0].descriptorCount = MAX_BOXES+3;
     typeCounts[1].type = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
-    typeCounts[1].descriptorCount = 3;
+    typeCounts[1].descriptorCount = 4;
 
     VkDescriptorPoolCreateInfo descriptorPoolInfo;
     descriptorPoolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     descriptorPoolInfo.flags = 0;
     descriptorPoolInfo.pNext = NULL;
-    descriptorPoolInfo.maxSets = MAX_BOXES+6;
+    descriptorPoolInfo.maxSets = MAX_BOXES+7;
     descriptorPoolInfo.poolSizeCount = 2;
     descriptorPoolInfo.pPoolSizes = typeCounts;
 
@@ -2161,7 +2191,18 @@ int setupUniforms(struct engine* engine)
     descriptorSetAllocateInfo.descriptorPool = descriptorPool;
     descriptorSetAllocateInfo.descriptorSetCount = 1;
     descriptorSetAllocateInfo.pSetLayouts = &engine->descriptorSetLayouts[2];
-    res = vkAllocateDescriptorSets(engine->vkDevice, &descriptorSetAllocateInfo, &engine->colourInputAttachmentDescriptorSet);
+    res = vkAllocateDescriptorSets(engine->vkDevice, &descriptorSetAllocateInfo, &engine->colourInputAttachmentDescriptorSets[0]);
+    if (res != VK_SUCCESS) {
+        printf ("vkAllocateDescriptorSets returned error %d.\n", res);
+        return -1;
+    }
+
+    descriptorSetAllocateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    descriptorSetAllocateInfo.pNext = NULL;
+    descriptorSetAllocateInfo.descriptorPool = descriptorPool;
+    descriptorSetAllocateInfo.descriptorSetCount = 1;
+    descriptorSetAllocateInfo.pSetLayouts = &engine->descriptorSetLayouts[2];
+    res = vkAllocateDescriptorSets(engine->vkDevice, &descriptorSetAllocateInfo, &engine->colourInputAttachmentDescriptorSets[1]);
     if (res != VK_SUCCESS) {
         printf ("vkAllocateDescriptorSets returned error %d.\n", res);
         return -1;
@@ -2191,7 +2232,7 @@ int setupUniforms(struct engine* engine)
 
 
     VkDescriptorBufferInfo uniformBufferInfo[MAX_BOXES+3];
-    VkWriteDescriptorSet writes[MAX_BOXES+6];
+    VkWriteDescriptorSet writes[MAX_BOXES+7];
     for (int i = 0; i<MAX_BOXES+3; i++) {
         uniformBufferInfo[i].buffer = uniformBuffer;
         uniformBufferInfo[i].offset = engine->modelBufferValsOffset*i;
@@ -2239,45 +2280,57 @@ int setupUniforms(struct engine* engine)
     writes[MAX_BOXES+2].dstBinding = 0;
 
     //The input attachment:
-    VkDescriptorImageInfo uniformImageInfo;
-    uniformImageInfo.imageLayout=VK_IMAGE_LAYOUT_GENERAL;
-    uniformImageInfo.imageView=engine->peelView;
-    uniformImageInfo.sampler=NULL;
+    VkDescriptorImageInfo peelUniformImageInfo[2];
+    peelUniformImageInfo[0].imageLayout=VK_IMAGE_LAYOUT_GENERAL;
+    peelUniformImageInfo[0].imageView=engine->peelViews[0];
+    peelUniformImageInfo[0].sampler=NULL;
     writes[MAX_BOXES+3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     writes[MAX_BOXES+3].pNext = NULL;
-    writes[MAX_BOXES+3].dstSet = engine->colourInputAttachmentDescriptorSet;
+    writes[MAX_BOXES+3].dstSet = engine->colourInputAttachmentDescriptorSets[0];
     writes[MAX_BOXES+3].descriptorCount = 1;
     writes[MAX_BOXES+3].descriptorType = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
-    writes[MAX_BOXES+3].pImageInfo=&uniformImageInfo;
+    writes[MAX_BOXES+3].pImageInfo=&peelUniformImageInfo[0];
     writes[MAX_BOXES+3].dstArrayElement = 0;
     writes[MAX_BOXES+3].dstBinding = 0;
+
+    peelUniformImageInfo[1].imageLayout=VK_IMAGE_LAYOUT_GENERAL;
+    peelUniformImageInfo[1].imageView=engine->peelViews[1];
+    peelUniformImageInfo[1].sampler=NULL;
+    writes[MAX_BOXES+4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[MAX_BOXES+4].pNext = NULL;
+    writes[MAX_BOXES+4].dstSet = engine->colourInputAttachmentDescriptorSets[1];
+    writes[MAX_BOXES+4].descriptorCount = 1;
+    writes[MAX_BOXES+4].descriptorType = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
+    writes[MAX_BOXES+4].pImageInfo=&peelUniformImageInfo[1];
+    writes[MAX_BOXES+4].dstArrayElement = 0;
+    writes[MAX_BOXES+4].dstBinding = 0;
 
     VkDescriptorImageInfo depthuniformImageInfo[2];
     depthuniformImageInfo[0].imageLayout=VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
     depthuniformImageInfo[0].imageView=engine->depthView[0];
     depthuniformImageInfo[0].sampler=NULL;
-    writes[MAX_BOXES+4].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[MAX_BOXES+4].pNext = NULL;
-    writes[MAX_BOXES+4].dstSet = engine->depthInputAttachmentDescriptorSets[0];
-    writes[MAX_BOXES+4].descriptorCount = 1;
-    writes[MAX_BOXES+4].descriptorType = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
-    writes[MAX_BOXES+4].pImageInfo=&depthuniformImageInfo[0];
-    writes[MAX_BOXES+4].dstArrayElement = 0;
-    writes[MAX_BOXES+4].dstBinding = 0;
+    writes[MAX_BOXES+5].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[MAX_BOXES+5].pNext = NULL;
+    writes[MAX_BOXES+5].dstSet = engine->depthInputAttachmentDescriptorSets[0];
+    writes[MAX_BOXES+5].descriptorCount = 1;
+    writes[MAX_BOXES+5].descriptorType = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
+    writes[MAX_BOXES+5].pImageInfo=&depthuniformImageInfo[0];
+    writes[MAX_BOXES+5].dstArrayElement = 0;
+    writes[MAX_BOXES+5].dstBinding = 0;
 
     depthuniformImageInfo[1].imageLayout=VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
     depthuniformImageInfo[1].imageView=engine->depthView[1];
     depthuniformImageInfo[1].sampler=NULL;
-    writes[MAX_BOXES+5].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    writes[MAX_BOXES+5].pNext = NULL;
-    writes[MAX_BOXES+5].dstSet = engine->depthInputAttachmentDescriptorSets[1];
-    writes[MAX_BOXES+5].descriptorCount = 1;
-    writes[MAX_BOXES+5].descriptorType = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
-    writes[MAX_BOXES+5].pImageInfo=&depthuniformImageInfo[1];
-    writes[MAX_BOXES+5].dstArrayElement = 0;
-    writes[MAX_BOXES+5].dstBinding = 0;
+    writes[MAX_BOXES+6].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writes[MAX_BOXES+6].pNext = NULL;
+    writes[MAX_BOXES+6].dstSet = engine->depthInputAttachmentDescriptorSets[1];
+    writes[MAX_BOXES+6].descriptorCount = 1;
+    writes[MAX_BOXES+6].descriptorType = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
+    writes[MAX_BOXES+6].pImageInfo=&depthuniformImageInfo[1];
+    writes[MAX_BOXES+6].dstArrayElement = 0;
+    writes[MAX_BOXES+6].dstBinding = 0;
 
-    vkUpdateDescriptorSets(engine->vkDevice, MAX_BOXES+6, writes, 0, NULL);
+    vkUpdateDescriptorSets(engine->vkDevice, MAX_BOXES+7, writes, 0, NULL);
 
     LOGI ("Descriptor sets updated %d.\n", res);
     return 0;
@@ -2546,7 +2599,7 @@ void createSecondaryBuffers(struct engine* engine)
             vkCmdBindDescriptorSets(engine->secondaryCommandBuffers[cmdBuffIndex],
                                     VK_PIPELINE_BIND_POINT_GRAPHICS,
                                     engine->blendPipelineLayout, 2, 1,
-                                    &engine->colourInputAttachmentDescriptorSet, 0, NULL);            
+                                    &engine->colourInputAttachmentDescriptorSets[(layer%2)], 0, NULL);
 
             VkDescriptorSet depthInputAttachmentDescriptorSets[2];
             depthInputAttachmentDescriptorSets[0]=engine->depthInputAttachmentDescriptorSets[(layer%2)];
@@ -3059,7 +3112,7 @@ int main()
     engine.simulation->step();
     engine.splitscreen = false;
     engine.rebuildCommadBuffersRequired = false;
-    engine.displayLayer=-1;
+    engine.displayLayer=1;
     engine.layerCount=4;
     engine.boxCount=100;
 
