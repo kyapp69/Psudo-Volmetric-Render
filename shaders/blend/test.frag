@@ -6,6 +6,7 @@
 layout (input_attachment_index=0, set=2, binding=0) uniform subpassInput subpass;
 layout (input_attachment_index=1, set=3, binding=0) uniform subpassInput subpass1;
 layout (input_attachment_index=2, set=4, binding=0) uniform subpassInput subpass2;
+layout (input_attachment_index=3, set=5, binding=0) uniform subpassInput subpass3;
 layout (location = 0) out vec4 outColor;
 
 float viewSpaceDepth(float NDCDepth)
@@ -15,15 +16,23 @@ float viewSpaceDepth(float NDCDepth)
 }
 
 void main() {
-   vec4 color = subpassLoad(subpass);
+   vec4 thiscolor = subpassLoad(subpass);
+   vec4 lastcolor = subpassLoad(subpass3);
    float thisDepth = subpassLoad(subpass1).r;
    float lastDepth = subpassLoad(subpass2).r;
-//   color.a=thisDepth;
-//   outColor = vec4(color.r*color.a, color.g*color.a, color.b*color.a, color.a);
+
+   vec3 color;
+   if (thiscolor.a<0.5) //If this is backface
+       color=thiscolor.rgb;
+   else if (lastcolor.a>0.5) //Else If last is frontface
+       color=lastcolor.rgb;
+   else
+       discard;
+
    float depthdiff=viewSpaceDepth(lastDepth)-viewSpaceDepth(thisDepth);
    float alpha = depthdiff/3.0;
-//   outColor = vec4(thisDepth,thisDepth,thisDepth,1);
-//   outColor = vec4(lastDepth,lastDepth,lastDepth,1);
+//   float alpha = 0.5;
+
    outColor = vec4(color.r*alpha, color.g*alpha, color.b*alpha, alpha);
 //   outColor = vec4(color.a, 1.0-color.a, 0.0, 1.0);
 //   outColor = color;

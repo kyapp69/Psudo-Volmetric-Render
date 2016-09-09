@@ -7,4 +7,5 @@ layout (location = 0) out vec4 outColor;
 
 void main() {
    outColor = color;
+   outColor.a = gl_FrontFacing ? 1.0 : 0.0;
 }

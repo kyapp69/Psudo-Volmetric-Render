@@ -1048,7 +1048,7 @@ static int engine_init_display(struct engine* engine) {
     attachments[3].flags = 0;    
     attachments[4].format = format;
     attachments[4].samples = VK_SAMPLE_COUNT_1_BIT;
-    attachments[4].loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    attachments[4].loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     attachments[4].storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     attachments[4].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     attachments[4].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
@@ -1122,11 +1122,12 @@ static int engine_init_display(struct engine* engine) {
 
         subpasses[i * 2 + 2].pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
         subpasses[i * 2 + 2].flags = 0;
-        subpasses[i * 2 + 2].inputAttachmentCount = 3;
-        VkAttachmentReference *inputAttachments = new VkAttachmentReference[3];  //This will leak
+        subpasses[i * 2 + 2].inputAttachmentCount = 4;
+        VkAttachmentReference *inputAttachments = new VkAttachmentReference[4];  //This will leak
         inputAttachments[0] = peelcolor_inputattachment_reference[i%2];
         inputAttachments[1] = depth_inputattachment_reference[(i%2)];
         inputAttachments[2] = depth_inputattachment_reference[!(i%2)];
+        inputAttachments[3] = peelcolor_inputattachment_reference[!(i%2)];
         subpasses[i * 2 + 2].pInputAttachments = inputAttachments;
         subpasses[i * 2 + 2].colorAttachmentCount = 1;
         subpasses[i * 2 + 2].pColorAttachments = &color_reference;
@@ -1224,7 +1225,7 @@ static int engine_init_display(struct engine* engine) {
     pPipelineLayoutCreateInfo.pNext = NULL;
     pPipelineLayoutCreateInfo.pushConstantRangeCount = 0;
     pPipelineLayoutCreateInfo.pPushConstantRanges = NULL;
-    pPipelineLayoutCreateInfo.setLayoutCount = 5;
+    pPipelineLayoutCreateInfo.setLayoutCount = 6;
     pPipelineLayoutCreateInfo.pSetLayouts = engine->descriptorSetLayouts;
 
     res = vkCreatePipelineLayout(engine->vkDevice, &pPipelineLayoutCreateInfo, NULL, &engine->blendPipelineLayout);
@@ -2109,9 +2110,9 @@ int setupUniforms(struct engine* engine)
 
     updateColours(engine);
 
-    engine->descriptorSetLayouts = new VkDescriptorSetLayout[5];
+    engine->descriptorSetLayouts = new VkDescriptorSetLayout[6];
 
-    for (int i = 0; i <5; i++) {
+    for (int i = 0; i <6; i++) {
         VkDescriptorSetLayoutBinding layout_bindings[1];
         layout_bindings[0].binding = 0;
         layout_bindings[0].descriptorType = (i<2) ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER : VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
@@ -2601,6 +2602,13 @@ void createSecondaryBuffers(struct engine* engine)
                                     engine->blendPipelineLayout, 2, 1,
                                     &engine->colourInputAttachmentDescriptorSets[(layer%2)], 0, NULL);
 
+
+            vkCmdBindDescriptorSets(engine->secondaryCommandBuffers[cmdBuffIndex],
+                                    VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    engine->blendPipelineLayout, 5, 1,
+                                    &engine->colourInputAttachmentDescriptorSets[!(layer%2)], 0, NULL);
+
+
             VkDescriptorSet depthInputAttachmentDescriptorSets[2];
             depthInputAttachmentDescriptorSets[0]=engine->depthInputAttachmentDescriptorSets[(layer%2)];
             depthInputAttachmentDescriptorSets[1]=engine->depthInputAttachmentDescriptorSets[!(layer%2)];
@@ -2666,13 +2674,17 @@ static void engine_draw_frame(struct engine* engine) {
 
 //    sleep(1);
 
-    VkClearValue clearValues[2];
+    VkClearValue clearValues[3];
     clearValues[0].color.float32[0] = 0.0f;
     clearValues[0].color.float32[1] = 0.0f;
     clearValues[0].color.float32[2] = 0.0f;
     clearValues[0].color.float32[3] = 1.0f;
     clearValues[1].depthStencil.depth = 0.0f;
     clearValues[1].depthStencil.stencil = 0;
+    clearValues[2].color.float32[0] = 0.0f;
+    clearValues[2].color.float32[1] = 0.0f;
+    clearValues[2].color.float32[2] = 0.0f;
+    clearValues[2].color.float32[3] = 1.0f;
 
     //The queue is idle, now is a good time to update the bound memory.
     updateUniforms(engine);
@@ -2703,7 +2715,7 @@ static void engine_draw_frame(struct engine* engine) {
     renderPassBeginInfo.renderArea.offset.y = 0;
     renderPassBeginInfo.renderArea.extent.width = engine->width;
     renderPassBeginInfo.renderArea.extent.height = engine->height;
-    renderPassBeginInfo.clearValueCount = 2;
+    renderPassBeginInfo.clearValueCount = 3;
     renderPassBeginInfo.pClearValues = clearValues;// + (i*2);
 
     VkCommandBufferBeginInfo commandBufferBeginInfo = {};
@@ -2761,7 +2773,7 @@ static void engine_draw_frame(struct engine* engine) {
         if (engine->displayLayer < 0 || layer==engine->displayLayer)
         {
 //        LOGI("Blend: Executing secondaryCommandBuffer %d", cmdBuffIndex + engine->swapchainImageCount);
-            if (layer%2!=0)
+            if (layer!=0)
                 vkCmdExecuteCommands(engine->renderCommandBuffer[0], 1,
                              &engine->secondaryCommandBuffers[cmdBuffIndex + engine->swapchainImageCount]);
         }
