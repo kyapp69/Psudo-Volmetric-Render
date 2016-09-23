@@ -978,34 +978,6 @@ static int engine_init_display(struct engine* engine) {
         }
         LOGI("Peel image created");
     }
-    res = vkEndCommandBuffer(engine->setupCommandBuffer);
-    if (res != VK_SUCCESS) {
-        LOGE ("vkEndCommandBuffer returned error %d.\n", res);
-        return -1;
-    }
-    //Submit the setup command buffer
-    VkSubmitInfo submitInfo[1];
-    submitInfo[0].pNext = NULL;
-    submitInfo[0].sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    submitInfo[0].waitSemaphoreCount = 0;
-    submitInfo[0].pWaitSemaphores = NULL;
-    submitInfo[0].pWaitDstStageMask = NULL;
-    submitInfo[0].commandBufferCount = 1;
-    submitInfo[0].pCommandBuffers = &engine->setupCommandBuffer;
-    submitInfo[0].signalSemaphoreCount = 0;
-    submitInfo[0].pSignalSemaphores = NULL;
-
-    res = vkQueueSubmit(engine->queue, 1, submitInfo, VK_NULL_HANDLE);
-    if (res != VK_SUCCESS) {
-        LOGE ("vkQueueSubmit returned error %d.\n", res);
-        return -1;
-    }
-
-    res = vkQueueWaitIdle(engine->queue);
-    if (res != VK_SUCCESS) {
-        LOGE ("vkQueueWaitIdle returned error %d.\n", res);
-        return -1;
-    }
 
     engine->secondaryCommandBuffers=new VkCommandBuffer[engine->swapchainImageCount*(MAX_LAYERS*2+1)];
     commandBufferAllocateInfo.level = VK_COMMAND_BUFFER_LEVEL_SECONDARY;
@@ -1370,24 +1342,25 @@ static int engine_init_display(struct engine* engine) {
     LOGI("%d framebuffers created", engine->swapchainImageCount);
 
     //Create Vertex buffers:
-    VkBufferCreateInfo vertexBufferCreateInfo;
-    vertexBufferCreateInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    vertexBufferCreateInfo.pNext = NULL;
-    vertexBufferCreateInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
-    vertexBufferCreateInfo.size = sizeof(vertexDataCube)+sizeof(vetrexDataPyramid)+sizeof(dragonFrontVertices)+sizeof(dragonFrontNormals)+sizeof(dragonBackVertices)+sizeof(dragonBackNormals);
-    vertexBufferCreateInfo.queueFamilyIndexCount = 0;
-    vertexBufferCreateInfo.pQueueFamilyIndices = NULL;
-    vertexBufferCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    vertexBufferCreateInfo.flags = 0;
+    VkBufferCreateInfo tempVertexBufferCreateInfo;
+    tempVertexBufferCreateInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    tempVertexBufferCreateInfo.pNext = NULL;
+    tempVertexBufferCreateInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    tempVertexBufferCreateInfo.size = sizeof(vertexDataCube)+sizeof(vetrexDataPyramid)+sizeof(dragonFrontVertices)+sizeof(dragonFrontNormals)+sizeof(dragonBackVertices)+sizeof(dragonBackNormals);
+    tempVertexBufferCreateInfo.queueFamilyIndexCount = 0;
+    tempVertexBufferCreateInfo.pQueueFamilyIndices = NULL;
+    tempVertexBufferCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    tempVertexBufferCreateInfo.flags = 0;
 
-    res = vkCreateBuffer(engine->vkDevice, &vertexBufferCreateInfo, NULL, &engine->vertexBuffer);
+    VkBuffer tempVertexBuffer;
+    res = vkCreateBuffer(engine->vkDevice, &tempVertexBufferCreateInfo, NULL, &tempVertexBuffer);
     if (res != VK_SUCCESS) {
         LOGE ("vkCreateBuffer returned error %d.\n", res);
         return -1;
     }
 
     found = 0;
-    vkGetBufferMemoryRequirements(engine->vkDevice, engine->vertexBuffer, &memoryRequirements);
+    vkGetBufferMemoryRequirements(engine->vkDevice, tempVertexBuffer, &memoryRequirements);
     typeBits = memoryRequirements.memoryTypeBits;
     requirements_mask = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
     for (typeIndex = 0; typeIndex < engine->physicalDeviceMemoryProperties.memoryTypeCount; typeIndex++) {
@@ -1413,15 +1386,15 @@ static int engine_init_display(struct engine* engine) {
     memAllocInfo.allocationSize = memoryRequirements.size;
     memAllocInfo.memoryTypeIndex = typeIndex;
 
-    VkDeviceMemory vertexMemory;
-    res = vkAllocateMemory(engine->vkDevice, &memAllocInfo, NULL, &vertexMemory);
+    VkDeviceMemory tempVertexMemory;
+    res = vkAllocateMemory(engine->vkDevice, &memAllocInfo, NULL, &tempVertexMemory);
     if (res != VK_SUCCESS) {
         LOGE ("vkAllocateMemory returned error %d.\n", res);
         return -1;
     }
 
     uint8_t *vertexMappedMemory;
-    res = vkMapMemory(engine->vkDevice, vertexMemory, 0, memoryRequirements.size, 0, (void **)&vertexMappedMemory);
+    res = vkMapMemory(engine->vkDevice, tempVertexMemory, 0, memoryRequirements.size, 0, (void **)&vertexMappedMemory);
     if (res != VK_SUCCESS) {
         LOGE ("vkMapMemory returned error %d.\n", res);
         return -1;
@@ -1438,24 +1411,154 @@ static int engine_init_display(struct engine* engine) {
     }
 
     uint8_t *dragonBackMappedMemory=dragonFrontMappedMemory+sizeof(dragonFrontVertices)+sizeof(dragonFrontNormals);
-    for (uint vertex=0; vertex<dragonFrontVertexCount; vertex++)
+    for (uint vertex=0; vertex<dragonBackVertexCount; vertex++)
     {
         memcpy(dragonBackMappedMemory+sizeof(float)*vertex*6, dragonBackVertices+vertex*3, sizeof(float)*3);
         memcpy(dragonBackMappedMemory+sizeof(float)*(vertex*6+3), dragonBackNormals+vertex*3, sizeof(float)*3);
     }
 
-    vkUnmapMemory(engine->vkDevice, vertexMemory);
+    vkUnmapMemory(engine->vkDevice, tempVertexMemory);
 
-    res = vkBindBufferMemory(engine->vkDevice, engine->vertexBuffer, vertexMemory, 0);
+    res = vkBindBufferMemory(engine->vkDevice, tempVertexBuffer, tempVertexMemory, 0);
     if (res != VK_SUCCESS) {
         LOGE ("vkBindBufferMemory returned error %d.\n", res);
         return -1;
-    }    
+    }
+
+    VkBufferCreateInfo vertexBufferCreateInfo;
+    vertexBufferCreateInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    vertexBufferCreateInfo.pNext = NULL;
+    vertexBufferCreateInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    vertexBufferCreateInfo.size = sizeof(vertexDataCube)+sizeof(vetrexDataPyramid)+sizeof(dragonFrontVertices)+sizeof(dragonFrontNormals)+sizeof(dragonBackVertices)+sizeof(dragonBackNormals);
+    vertexBufferCreateInfo.queueFamilyIndexCount = 0;
+    vertexBufferCreateInfo.pQueueFamilyIndices = NULL;
+    vertexBufferCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    vertexBufferCreateInfo.flags = 0;
+
+    res = vkCreateBuffer(engine->vkDevice, &vertexBufferCreateInfo, NULL, &engine->vertexBuffer);
+    if (res != VK_SUCCESS) {
+      printf ("vkCreateBuffer returned error %d.\n", res);
+      return -1;
+    }
+
+    vkGetBufferMemoryRequirements(engine->vkDevice, engine->vertexBuffer, &memoryRequirements);
+    typeBits = memoryRequirements.memoryTypeBits;
+    requirements_mask = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+    for (typeIndex = 0; typeIndex < engine->physicalDeviceMemoryProperties.memoryTypeCount; typeIndex++) {
+      if ((typeBits & 1) == 1)//Check last bit;
+      {
+        if ((engine->physicalDeviceMemoryProperties.memoryTypes[typeIndex].propertyFlags & requirements_mask) == requirements_mask)
+        {
+      found=1;
+      break;
+        }
+        typeBits >>= 1;
+      }
+    }
+
+    if (!found)
+    {
+      printf ("Did not find a suitible memory type.\n");
+      return -1;
+    }else
+      printf ("Using memory type %d.\n", typeIndex);
+
+    memAllocInfo.pNext = NULL;
+    memAllocInfo.allocationSize = memoryRequirements.size;
+    memAllocInfo.memoryTypeIndex = typeIndex;
+
+    VkDeviceMemory vertexMemory;
+    res = vkAllocateMemory(engine->vkDevice, &memAllocInfo, NULL, &vertexMemory);
+    if (res != VK_SUCCESS) {
+      printf ("vkAllocateMemory returned error %d.\n", res);
+      return -1;
+    }
+
+    res = vkBindBufferMemory(engine->vkDevice, engine->vertexBuffer, vertexMemory, 0);
+    if (res != VK_SUCCESS) {
+      printf ("vkBindBufferMemory returned error %d.\n", res);
+      return -1;
+    }
+
+    VkBufferCopy region;
+    region.srcOffset=0;
+    region.dstOffset=0;
+    region.size=vertexBufferCreateInfo.size;
+    vkCmdCopyBuffer(commandBuffers[0], tempVertexBuffer, engine->vertexBuffer, 1, &region);
+
+    VkBufferCreateInfo tempIndexBufferCreateInfo;
+    tempIndexBufferCreateInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    tempIndexBufferCreateInfo.pNext = NULL;
+    tempIndexBufferCreateInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    tempIndexBufferCreateInfo.size = sizeof(dragonFrontIndices)+sizeof(dragonBackIndices);
+    tempIndexBufferCreateInfo.queueFamilyIndexCount = 0;
+    tempIndexBufferCreateInfo.pQueueFamilyIndices = NULL;
+    tempIndexBufferCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    tempIndexBufferCreateInfo.flags = 0;
+
+    VkBuffer tempIndexBuffer;
+    res = vkCreateBuffer(engine->vkDevice, &tempIndexBufferCreateInfo, NULL, &tempIndexBuffer);
+    if (res != VK_SUCCESS) {
+      printf ("vkCreateBuffer returned error %d.\n", res);
+      return -1;
+    }
+
+    vkGetBufferMemoryRequirements(engine->vkDevice, tempIndexBuffer, &memoryRequirements);
+    typeBits = memoryRequirements.memoryTypeBits;
+    requirements_mask = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    for (typeIndex = 0; typeIndex < engine->physicalDeviceMemoryProperties.memoryTypeCount; typeIndex++) {
+      if ((typeBits & 1) == 1)//Check last bit;
+      {
+        if ((engine->physicalDeviceMemoryProperties.memoryTypes[typeIndex].propertyFlags & requirements_mask) == requirements_mask)
+        {
+      found=1;
+      break;
+        }
+        typeBits >>= 1;
+      }
+    }
+
+    if (!found)
+    {
+      printf ("Did not find a suitible memory type.\n");
+      return -1;
+    }else
+      printf ("Using memory type %d.\n", typeIndex);
+
+    memAllocInfo.pNext = NULL;
+    memAllocInfo.allocationSize = memoryRequirements.size;
+    memAllocInfo.memoryTypeIndex = typeIndex;
+
+    VkDeviceMemory tempIndexMemory;
+    res = vkAllocateMemory(engine->vkDevice, &memAllocInfo, NULL, &tempIndexMemory);
+    if (res != VK_SUCCESS) {
+      printf ("vkAllocateMemory returned error %d.\n", res);
+      return -1;
+    }
+
+    uint8_t *indexMappedMemory;
+    res = vkMapMemory(engine->vkDevice, tempIndexMemory, 0, memoryRequirements.size, 0, (void **)&indexMappedMemory);
+    if (res != VK_SUCCESS) {
+      printf ("vkMapMemory returned error %d.\n", res);
+      return -1;
+    }
+
+  //  printf ("lastindex: %d.\n", dragonIndices[dragonIndices-1]);
+    memcpy(indexMappedMemory, dragonFrontIndices, sizeof(dragonFrontIndices));
+    memcpy(indexMappedMemory+sizeof(dragonFrontIndices), dragonBackIndices, sizeof(dragonBackIndices));
+
+    vkUnmapMemory(engine->vkDevice, tempIndexMemory);
+
+    res = vkBindBufferMemory(engine->vkDevice, tempIndexBuffer, tempIndexMemory, 0);
+    if (res != VK_SUCCESS) {
+      printf ("vkBindBufferMemory returned error %d.\n", res);
+      return -1;
+    }
 
     VkBufferCreateInfo indexBufferCreateInfo;
     indexBufferCreateInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     indexBufferCreateInfo.pNext = NULL;
-    indexBufferCreateInfo.usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+    indexBufferCreateInfo.usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
     indexBufferCreateInfo.size = sizeof(dragonFrontIndices)+sizeof(dragonBackIndices);
     indexBufferCreateInfo.queueFamilyIndexCount = 0;
     indexBufferCreateInfo.pQueueFamilyIndices = NULL;
@@ -1470,7 +1573,7 @@ static int engine_init_display(struct engine* engine) {
 
     vkGetBufferMemoryRequirements(engine->vkDevice, engine->indexBuffer, &memoryRequirements);
     typeBits = memoryRequirements.memoryTypeBits;
-    requirements_mask = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    requirements_mask = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
     for (typeIndex = 0; typeIndex < engine->physicalDeviceMemoryProperties.memoryTypeCount; typeIndex++) {
       if ((typeBits & 1) == 1)//Check last bit;
       {
@@ -1501,25 +1604,15 @@ static int engine_init_display(struct engine* engine) {
       return -1;
     }
 
-    uint8_t *indexMappedMemory;
-    res = vkMapMemory(engine->vkDevice, indexMemory, 0, memoryRequirements.size, 0, (void **)&indexMappedMemory);
-    if (res != VK_SUCCESS) {
-      printf ("vkMapMemory returned error %d.\n", res);
-      return -1;
-    }
-
-
-  //  printf ("lastindex: %d.\n", dragonIndices[dragonIndices-1]);
-    memcpy(indexMappedMemory, dragonFrontIndices, sizeof(dragonFrontIndices));
-    memcpy(indexMappedMemory+sizeof(dragonFrontIndices), dragonBackIndices, sizeof(dragonBackIndices));
-
-    vkUnmapMemory(engine->vkDevice, indexMemory);
-
     res = vkBindBufferMemory(engine->vkDevice, engine->indexBuffer, indexMemory, 0);
     if (res != VK_SUCCESS) {
       printf ("vkBindBufferMemory returned error %d.\n", res);
       return -1;
     }
+
+    region.size=indexBufferCreateInfo.size;
+    vkCmdCopyBuffer(commandBuffers[0], tempIndexBuffer, engine->indexBuffer, 1, &region);
+
 
     engine->vertexInputBindingDescription.binding = 0;
     engine->vertexInputBindingDescription.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
@@ -1546,6 +1639,36 @@ static int engine_init_display(struct engine* engine) {
     setupTraditionalBlendPipeline(engine);
     setupPeelPipeline(engine);
     setupBlendPipeline(engine);
+
+    //Submit the setup command buffer
+    res = vkEndCommandBuffer(engine->setupCommandBuffer);
+    if (res != VK_SUCCESS) {
+        LOGE ("vkEndCommandBuffer returned error %d.\n", res);
+        return -1;
+    }
+
+    VkSubmitInfo submitInfo[1];
+    submitInfo[0].pNext = NULL;
+    submitInfo[0].sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo[0].waitSemaphoreCount = 0;
+    submitInfo[0].pWaitSemaphores = NULL;
+    submitInfo[0].pWaitDstStageMask = NULL;
+    submitInfo[0].commandBufferCount = 1;
+    submitInfo[0].pCommandBuffers = &engine->setupCommandBuffer;
+    submitInfo[0].signalSemaphoreCount = 0;
+    submitInfo[0].pSignalSemaphores = NULL;
+
+    res = vkQueueSubmit(engine->queue, 1, submitInfo, VK_NULL_HANDLE);
+    if (res != VK_SUCCESS) {
+        LOGE ("vkQueueSubmit returned error %d.\n", res);
+        return -1;
+    }
+
+    res = vkQueueWaitIdle(engine->queue);
+    if (res != VK_SUCCESS) {
+        LOGE ("vkQueueWaitIdle returned error %d.\n", res);
+        return -1;
+    }
 
     VkSemaphoreCreateInfo presentCompleteSemaphoreCreateInfo;
     presentCompleteSemaphoreCreateInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
