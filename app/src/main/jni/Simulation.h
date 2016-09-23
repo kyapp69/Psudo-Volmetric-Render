@@ -19,6 +19,7 @@ public:
     float transforms[MAX_BOXES*16];
     float colours[MAX_BOXES*3];
     bool paused;
+    int frame;
 };
 
 

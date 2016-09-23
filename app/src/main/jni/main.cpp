@@ -30,11 +30,16 @@
 #include <string.h>
 
 #include <stdio.h>
-#include "matrix.h"
 #include "models.h"
+#include "models/dragonback.c"
+#include "models/dragonfront.c"
 #include "btQuickprof.h"
 #include "Simulation.h"
 #include "log.h"
+extern "C"
+{
+#include "matrix.h"
+}
 
 #ifdef __ANDROID__
 #include <android/sensor.h>
@@ -114,6 +119,7 @@ struct engine {
     VkDescriptorSet depthInputAttachmentDescriptorSets[2];
     uint32_t modelBufferValsOffset;
     VkBuffer vertexBuffer;
+    VkBuffer indexBuffer;
     VkQueue queue;
     bool vulkanSetupOK;
     int frame = 0;
@@ -123,6 +129,8 @@ struct engine {
     VkPipeline traditionalBlendPipeline;
     VkPipeline peelPipeline;
     VkPipeline firstPeelPipeline;
+    VkPipeline modelpeelPipeline;
+    VkPipeline modelfirstPeelPipeline;
     VkPipeline blendPipeline;
     btClock *frameRateClock;
     Simulation *simulation;
@@ -130,6 +138,8 @@ struct engine {
     bool rebuildCommadBuffersRequired;
     VkVertexInputBindingDescription vertexInputBindingDescription;
     VkVertexInputAttributeDescription vertexInputAttributeDescription;
+    VkVertexInputBindingDescription modelVertexInputBindingDescription;
+    VkVertexInputAttributeDescription modelVertexInputAttributeDescription[2];
     VkShaderModule shdermodules[6];
     int displayLayer;
     int layerCount;
@@ -1364,7 +1374,7 @@ static int engine_init_display(struct engine* engine) {
     vertexBufferCreateInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     vertexBufferCreateInfo.pNext = NULL;
     vertexBufferCreateInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
-    vertexBufferCreateInfo.size = sizeof(vertexDataCube)+sizeof(vetrexDataPyramid);
+    vertexBufferCreateInfo.size = sizeof(vertexDataCube)+sizeof(vetrexDataPyramid)+sizeof(dragonFrontVertices)+sizeof(dragonFrontNormals)+sizeof(dragonBackVertices)+sizeof(dragonBackNormals);
     vertexBufferCreateInfo.queueFamilyIndexCount = 0;
     vertexBufferCreateInfo.pQueueFamilyIndices = NULL;
     vertexBufferCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
@@ -1420,13 +1430,97 @@ static int engine_init_display(struct engine* engine) {
     memcpy(vertexMappedMemory, vertexDataCube, sizeof(vertexDataCube));
     memcpy(vertexMappedMemory+sizeof(vertexDataCube), vetrexDataPyramid, sizeof(vetrexDataPyramid));
 
+    uint8_t *dragonFrontMappedMemory=vertexMappedMemory+sizeof(vertexDataCube)+sizeof(vetrexDataPyramid);
+    for (uint vertex=0; vertex<dragonFrontVertexCount; vertex++)
+    {
+        memcpy(dragonFrontMappedMemory+sizeof(float)*vertex*6, dragonFrontVertices+vertex*3, sizeof(float)*3);
+        memcpy(dragonFrontMappedMemory+sizeof(float)*(vertex*6+3), dragonFrontNormals+vertex*3, sizeof(float)*3);
+    }
+
+    uint8_t *dragonBackMappedMemory=dragonFrontMappedMemory+sizeof(dragonFrontVertices)+sizeof(dragonFrontNormals);
+    for (uint vertex=0; vertex<dragonFrontVertexCount; vertex++)
+    {
+        memcpy(dragonBackMappedMemory+sizeof(float)*vertex*6, dragonBackVertices+vertex*3, sizeof(float)*3);
+        memcpy(dragonBackMappedMemory+sizeof(float)*(vertex*6+3), dragonBackNormals+vertex*3, sizeof(float)*3);
+    }
+
     vkUnmapMemory(engine->vkDevice, vertexMemory);
 
     res = vkBindBufferMemory(engine->vkDevice, engine->vertexBuffer, vertexMemory, 0);
     if (res != VK_SUCCESS) {
         LOGE ("vkBindBufferMemory returned error %d.\n", res);
         return -1;
+    }    
+
+    VkBufferCreateInfo indexBufferCreateInfo;
+    indexBufferCreateInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    indexBufferCreateInfo.pNext = NULL;
+    indexBufferCreateInfo.usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+    indexBufferCreateInfo.size = sizeof(dragonFrontIndices)+sizeof(dragonBackIndices);
+    indexBufferCreateInfo.queueFamilyIndexCount = 0;
+    indexBufferCreateInfo.pQueueFamilyIndices = NULL;
+    indexBufferCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    indexBufferCreateInfo.flags = 0;
+
+    res = vkCreateBuffer(engine->vkDevice, &indexBufferCreateInfo, NULL, &engine->indexBuffer);
+    if (res != VK_SUCCESS) {
+      printf ("vkCreateBuffer returned error %d.\n", res);
+      return -1;
     }
+
+    vkGetBufferMemoryRequirements(engine->vkDevice, engine->indexBuffer, &memoryRequirements);
+    typeBits = memoryRequirements.memoryTypeBits;
+    requirements_mask = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    for (typeIndex = 0; typeIndex < engine->physicalDeviceMemoryProperties.memoryTypeCount; typeIndex++) {
+      if ((typeBits & 1) == 1)//Check last bit;
+      {
+        if ((engine->physicalDeviceMemoryProperties.memoryTypes[typeIndex].propertyFlags & requirements_mask) == requirements_mask)
+        {
+      found=1;
+      break;
+        }
+        typeBits >>= 1;
+      }
+    }
+
+    if (!found)
+    {
+      printf ("Did not find a suitible memory type.\n");
+      return -1;
+    }else
+      printf ("Using memory type %d.\n", typeIndex);
+
+    memAllocInfo.pNext = NULL;
+    memAllocInfo.allocationSize = memoryRequirements.size;
+    memAllocInfo.memoryTypeIndex = typeIndex;
+
+    VkDeviceMemory indexMemory;
+    res = vkAllocateMemory(engine->vkDevice, &memAllocInfo, NULL, &indexMemory);
+    if (res != VK_SUCCESS) {
+      printf ("vkAllocateMemory returned error %d.\n", res);
+      return -1;
+    }
+
+    uint8_t *indexMappedMemory;
+    res = vkMapMemory(engine->vkDevice, indexMemory, 0, memoryRequirements.size, 0, (void **)&indexMappedMemory);
+    if (res != VK_SUCCESS) {
+      printf ("vkMapMemory returned error %d.\n", res);
+      return -1;
+    }
+
+
+  //  printf ("lastindex: %d.\n", dragonIndices[dragonIndices-1]);
+    memcpy(indexMappedMemory, dragonFrontIndices, sizeof(dragonFrontIndices));
+    memcpy(indexMappedMemory+sizeof(dragonFrontIndices), dragonBackIndices, sizeof(dragonBackIndices));
+
+    vkUnmapMemory(engine->vkDevice, indexMemory);
+
+    res = vkBindBufferMemory(engine->vkDevice, engine->indexBuffer, indexMemory, 0);
+    if (res != VK_SUCCESS) {
+      printf ("vkBindBufferMemory returned error %d.\n", res);
+      return -1;
+    }
+
     engine->vertexInputBindingDescription.binding = 0;
     engine->vertexInputBindingDescription.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
     engine->vertexInputBindingDescription.stride = sizeof(vertexDataCube[0]);
@@ -1435,10 +1529,19 @@ static int engine_init_display(struct engine* engine) {
     engine->vertexInputAttributeDescription.location = 0;
     engine->vertexInputAttributeDescription.format = VK_FORMAT_R32G32B32A32_SFLOAT;
     engine->vertexInputAttributeDescription.offset = 0;
-//    engine->vertexInputAttributeDescription[1].binding = 0;
-//    engine->vertexInputAttributeDescription[1].location = 1;
-//    engine->vertexInputAttributeDescription[1].format = VK_FORMAT_R32G32B32A32_SFLOAT;
-//    engine->vertexInputAttributeDescription[1].offset = 16;
+
+    engine->modelVertexInputBindingDescription.binding = 0;
+    engine->modelVertexInputBindingDescription.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+    engine->modelVertexInputBindingDescription.stride = sizeof(float) * 6;
+
+    engine->modelVertexInputAttributeDescription[0].binding = 0;
+    engine->modelVertexInputAttributeDescription[0].location = 0;
+    engine->modelVertexInputAttributeDescription[0].format = VK_FORMAT_R32G32B32_SFLOAT;
+    engine->modelVertexInputAttributeDescription[0].offset = 0;
+    engine->modelVertexInputAttributeDescription[1].binding = 0;
+    engine->modelVertexInputAttributeDescription[1].location = 1;
+    engine->modelVertexInputAttributeDescription[1].format = VK_FORMAT_R32G32B32_SFLOAT;
+    engine->modelVertexInputAttributeDescription[1].offset = sizeof(float) * 3;
 
     setupTraditionalBlendPipeline(engine);
     setupPeelPipeline(engine);
@@ -1644,7 +1747,8 @@ int setupTraditionalBlendPipeline(struct engine* engine)
     if (res != VK_SUCCESS) {
         LOGE ("vkCreateGraphicsPipelines returned error %d.\n", res);
         return -1;
-    }
+    }    
+
     return 0;
 }
 
@@ -1833,6 +1937,34 @@ int setupPeelPipeline(struct engine* engine) {
 
     res = vkCreateGraphicsPipelines(engine->vkDevice, VK_NULL_HANDLE, 1, &pipelineInfo, NULL,
                                     &engine->firstPeelPipeline);
+    if (res != VK_SUCCESS) {
+        LOGE("vkCreateGraphicsPipelines returned error %d.\n", res);
+        return -1;
+    }    
+
+    rs.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    vi.pVertexBindingDescriptions = &engine->modelVertexInputBindingDescription;
+    vi.vertexAttributeDescriptionCount = 2;
+    vi.pVertexAttributeDescriptions = engine->modelVertexInputAttributeDescription;
+    pipelineInfo.layout = engine->peelPipelineLayout;
+    pipelineInfo.pStages = peelShaderStages;
+    pipelineInfo.subpass = 3;
+
+    LOGI("Creating model peel pipeline");
+    res = vkCreateGraphicsPipelines(engine->vkDevice, VK_NULL_HANDLE, 1, &pipelineInfo, NULL,
+                                    &engine->modelpeelPipeline);
+    if (res != VK_SUCCESS) {
+        LOGE("vkCreateGraphicsPipelines returned error %d.\n", res);
+        return -1;
+    }
+
+    LOGI("Creating model first peel pipeline");
+    pipelineInfo.layout = engine->pipelineLayout;
+    pipelineInfo.pStages = firstPeelShaderStages;
+    pipelineInfo.subpass = 1;
+
+    res = vkCreateGraphicsPipelines(engine->vkDevice, VK_NULL_HANDLE, 1, &pipelineInfo, NULL,
+                                    &engine->modelfirstPeelPipeline);
     if (res != VK_SUCCESS) {
         LOGE("vkCreateGraphicsPipelines returned error %d.\n", res);
         return -1;
@@ -2493,7 +2625,7 @@ void createSecondaryBuffers(struct engine* engine)
             offsets[0] = 0;
             vkCmdBindVertexBuffers(engine->secondaryCommandBuffers[cmdBuffIndex], 0, 1, &engine->vertexBuffer,
                                    offsets);
-            for (int object = 0; object < engine->boxCount/2; object++) {
+            for (int object = 2; object < engine->boxCount/2; object++) {
                 vkCmdBindDescriptorSets(engine->secondaryCommandBuffers[cmdBuffIndex],
                                         VK_PIPELINE_BIND_POINT_GRAPHICS,
                                         engine->pipelineLayout, 0, 1,
@@ -2512,7 +2644,43 @@ void createSecondaryBuffers(struct engine* engine)
                                         &engine->modelDescriptorSets[object], 0, NULL);
 
                 vkCmdDraw(engine->secondaryCommandBuffers[cmdBuffIndex], 6 * 3, 1, 0, 0);
+            }            
+
+            //Draw the dragon
+            vkCmdBindPipeline(engine->secondaryCommandBuffers[cmdBuffIndex],
+                              VK_PIPELINE_BIND_POINT_GRAPHICS,
+                              (layer==0) ? engine->modelfirstPeelPipeline : engine->modelpeelPipeline);
+
+            vkCmdSetScissor(engine->secondaryCommandBuffers[cmdBuffIndex], 0, 1, &scissor);
+            vkCmdBindDescriptorSets(engine->secondaryCommandBuffers[cmdBuffIndex],
+                                    VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    (layer==0) ? engine->pipelineLayout : engine->blendPipelineLayout, 1, 1,
+                                    &engine->sceneDescriptorSet, 0, NULL);
+            if (layer>0)
+            {
+                vkCmdBindDescriptorSets(engine->secondaryCommandBuffers[cmdBuffIndex],
+                                        VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                        engine->blendPipelineLayout, 2, 1,
+                                        &engine->depthInputAttachmentDescriptorSets[!(layer%2)], 0, NULL);
             }
+
+            vkCmdBindDescriptorSets(engine->secondaryCommandBuffers[cmdBuffIndex],
+                                    VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    engine->pipelineLayout, 0, 1,
+                                    &engine->modelDescriptorSets[0], 0, NULL);
+            offsets[0] = sizeof(vertexDataCube)+sizeof(vetrexDataPyramid);
+            vkCmdBindVertexBuffers(engine->secondaryCommandBuffers[cmdBuffIndex], 0, 1, &engine->vertexBuffer, offsets);
+            vkCmdBindIndexBuffer(engine->secondaryCommandBuffers[cmdBuffIndex], engine->indexBuffer, 0, VK_INDEX_TYPE_UINT32);
+            vkCmdDrawIndexed(engine->secondaryCommandBuffers[cmdBuffIndex], dragonFrontNumIndices, 1, 0, 0, 0);
+            vkCmdBindDescriptorSets(engine->secondaryCommandBuffers[cmdBuffIndex],
+                                    VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    engine->pipelineLayout, 0, 1,
+                                    &engine->modelDescriptorSets[1], 0, NULL);
+            offsets[0] = sizeof(vertexDataCube)+sizeof(vetrexDataPyramid)+sizeof(dragonFrontVertices)+sizeof(dragonFrontNormals);
+            vkCmdBindVertexBuffers(engine->secondaryCommandBuffers[cmdBuffIndex], 0, 1, &engine->vertexBuffer, offsets);
+            vkCmdBindIndexBuffer(engine->secondaryCommandBuffers[cmdBuffIndex], engine->indexBuffer, sizeof(dragonFrontIndices), VK_INDEX_TYPE_UINT32);
+            vkCmdDrawIndexed(engine->secondaryCommandBuffers[cmdBuffIndex], dragonBackNumIndices, 1, 0, 0, 0);
+
 
             //Test clearing depth buffer at end
             VkClearAttachment clear;
@@ -3124,9 +3292,9 @@ int main()
     engine.simulation->step();
     engine.splitscreen = false;
     engine.rebuildCommadBuffersRequired = false;
-    engine.displayLayer=1;
+    engine.displayLayer=-1;
     engine.layerCount=4;
-    engine.boxCount=100;
+    engine.boxCount=4;
 
     //Setup XCB Connection:
     const xcb_setup_t *setup;
