@@ -7,4 +7,4 @@ Keys (on Linux):
 - Up and down to change number of layers used.
 - W and S to display only one of the peeled layers and to select the currently displayed layer.
 
-![Screenshot](https://github.com/openforeveryone/VulkanDepthPeel/blob/master/ScreenShot.png "Screenshot")
+![Screenshot](ScreenShot.png "Screenshot")
