@@ -3416,8 +3416,8 @@ int main()
     engine.splitscreen = false;
     engine.rebuildCommadBuffersRequired = false;
     engine.displayLayer=-1;
-    engine.layerCount=4;
-    engine.boxCount=4;
+    engine.layerCount=MAX_LAYERS;
+    engine.boxCount=20;
 
     //Setup XCB Connection:
     const xcb_setup_t *setup;
